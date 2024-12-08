@@ -8,6 +8,12 @@
 #include "consumer.h"
 #include "reader_writer.h"
 #include <fcntl.h>
+#include <atomic>
+#include <sys/wait.h>
+
+#include "bconsumer.h"
+#include "bproducer.h"
+#include "p_producer_consumer.h"
 
 std::atomic stopProduction(false);
 
@@ -20,65 +26,54 @@ std::atomic stopProduction(false);
 }
 
 void runProducerConsumer() {
-    const int NUM_PRODUCERS = 3;
-    const int NUM_CONSUMERS = 2;
+    constexpr int NUM_PRODUCERS = 3;
+    constexpr int NUM_CONSUMERS = 2;
 
-    // Create pipe
     int pipe_fd[2];
     if (pipe(pipe_fd) == -1) {
         std::cerr << "Pipe creation failed" << std::endl;
         return;
     }
 
-    // Set pipe to non-blocking mode
-    int flags = fcntl(pipe_fd[1], F_GETFL, 0);
+    const int flags = fcntl(pipe_fd[1], F_GETFL, 0);
     fcntl(pipe_fd[1], F_SETFL, flags | O_NONBLOCK);
 
-    // Create semaphores
     std::counting_semaphore<3> producerSemaphore(3);
     std::counting_semaphore<5> consumerSemaphore(5);
 
-    // Atomic flags for synchronization
-    std::atomic<bool> stopProduction(false);
-    std::atomic<int> itemsProduced(0);
-    std::atomic<int> itemsConsumed(0);
+    std::atomic stopProduction(false);
+    std::atomic itemsProduced(0);
+    std::atomic itemsConsumed(0);
 
-    // Create threads
     std::vector<std::thread> producerThreads;
     std::vector<std::thread> consumerThreads;
 
-    // Create producer threads
     for (int i = 0; i < NUM_PRODUCERS; ++i) {
         producerThreads.emplace_back([&, i]() {
-            Producer producer(i, pipe_fd[1], producerSemaphore);
+            const Producer producer(i, pipe_fd[1], producerSemaphore);
             producer.run(itemsProduced, stopProduction);
         });
     }
 
-    // Create consumer threads
     for (int i = 0; i < NUM_CONSUMERS; ++i) {
         consumerThreads.emplace_back([&, i]() {
-            Consumer consumer(i, pipe_fd[0], consumerSemaphore);
+            const Consumer consumer(i, pipe_fd[0], consumerSemaphore);
             consumer.run(itemsConsumed, stopProduction);
         });
     }
 
-    // Wait for producers to finish
     for (auto& thread : producerThreads) {
         thread.join();
     }
 
-    // Signal stop and wait for consumers
     stopProduction = true;
     for (auto& thread : consumerThreads) {
         thread.join();
     }
 
-    // Close pipe
     close(pipe_fd[0]);
     close(pipe_fd[1]);
 
-    // Print final statistics
     std::cout << "Total items produced: " << itemsProduced
               << "\nTotal items consumed: " << itemsConsumed << std::endl;
 }
@@ -95,12 +90,84 @@ void runReaderWriter() {
     rw.run();
 }
 
+void runProcessProducerConsumer() {
+    const sem_t *mutex = sem_open(PSEM_MUTEX_NAME, O_CREAT, 0644, 1);
+    const sem_t *full = sem_open(PSEM_FULL_NAME, O_CREAT, 0644, PBUFFER_SIZE);
+
+    if (const sem_t *empty = sem_open(PSEM_EMPTY_NAME, O_CREAT, 0644, 0); mutex == SEM_FAILED || full == SEM_FAILED || empty == SEM_FAILED) {
+        perror("Failed to create semaphores");
+        return;
+    }
+
+    int pipe_fd[2];
+    if (pipe(pipe_fd) == -1) {
+        perror("Failed to create pipe");
+        return;
+    }
+
+    for (int i = 0; i < PNUM_PRODUCERS; i++) {
+        if (const pid_t pid = fork(); pid == 0) {
+            close(pipe_fd[0]);
+            pproducer(i, pipe_fd[1]);
+            exit(0);
+        }
+    }
+
+    for (int i = 0; i < PNUM_CONSUMERS; i++) {
+        if (const pid_t pid = fork(); pid == 0) {
+            close(pipe_fd[1]);
+            pconsumer(i, pipe_fd[0]);
+            exit(0);
+        }
+    }
+
+    for (int i = 0; i < PNUM_PRODUCERS + PNUM_CONSUMERS; i++) {
+        wait(nullptr);
+    }
+
+    sem_unlink(PSEM_MUTEX_NAME);
+    sem_unlink(PSEM_FULL_NAME);
+    sem_unlink(PSEM_EMPTY_NAME);
+}
+
+void runProducerConsumerBuffer() {
+    Buffer buffer(10);
+    std::counting_semaphore<3> producerSem(3);
+    std::counting_semaphore<5> consumerSem(5);
+
+    std::vector<std::thread> producers;
+    std::vector<std::thread> consumers;
+
+    for (int i = 0; i < 3; ++i) {
+        producers.emplace_back([i, &buffer, &producerSem]() {
+            const BProducer bproducer(i, buffer, producerSem);
+            bproducer.run();
+        });
+    }
+
+    for (int i = 0; i < 3; ++i) {
+        consumers.emplace_back([i, &buffer, &consumerSem]() {
+            const BConsumer bconsumer(i, buffer, consumerSem);
+            bconsumer.run();
+        });
+    }
+
+    for (auto& p : producers) {
+        p.join();
+    }
+    for (auto& c : consumers) {
+        c.join();
+    }
+}
+
 int main() {
     while (true) {
         std::cout << "=== Main Menu ===\n";
         std::cout << "1. Run Signal Handler\n";
-        std::cout << "2. Run Producer/Consumer\n";
-        std::cout << "3. Run Reader/Writer\n";
+        std::cout << "2. Run Threaded Producer/Consumer\n";
+        std::cout << "3. Run Process Producer/Consumer\n";
+        std::cout << "4. Run Buffered Producer/Consumer\n";
+        std::cout << "5. Run Reader/Writer\n";
         std::cout << "0. Exit\n";
         std::cout << "Enter your choice: ";
 
@@ -112,10 +179,18 @@ int main() {
                 std::cout << "Running Signal Handler...\n";
             runSignalHandler();
             case 2:
-                std::cout << "Running Producer/Consumer...\n";
+                std::cout << "Running Threaded Producer/Consumer...\n";
             runProducerConsumer();
             break;
             case 3:
+                std::cout << "Running Process Producer/Consumer...\n";
+            runProcessProducerConsumer();
+            break;
+            case 4:
+                std::cout << "Running Buffered Producer/Consumer...\n";
+            runProducerConsumerBuffer();
+            break;
+            case 5:
                 std::cout << "Running Reader-Writer...\n";
             runReaderWriter();
             break;
