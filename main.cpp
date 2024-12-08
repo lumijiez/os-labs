@@ -6,6 +6,7 @@
 #include "buffer.h"
 #include "producer.h"
 #include "consumer.h"
+#include "reader_writer.h"
 
 [[noreturn]] void runSignalHandler() {
     setupSignalHandlers();
@@ -45,11 +46,24 @@ void runProducerConsumer() {
     }
 }
 
+void runReaderWriter() {
+    int numReaders = 5;
+    int numWriters = 2;
+    std::string filename = "shared_resource.txt";
+
+    std::ofstream file(filename, std::ios::trunc);
+    file.close();
+
+    ReaderWriter rw(numReaders, numWriters, filename);
+    rw.run();
+}
+
 int main() {
     while (true) {
         std::cout << "=== Main Menu ===\n";
-        std::cout << "1. Run Signal Handler Program\n";
-        std::cout << "2. Run Producer/Consumer Program\n";
+        std::cout << "1. Run Signal Handler\n";
+        std::cout << "2. Run Producer/Consumer\n";
+        std::cout << "3. Run Reader/Writer\n";
         std::cout << "0. Exit\n";
         std::cout << "Enter your choice: ";
 
@@ -58,12 +72,16 @@ int main() {
 
         switch (choice) {
             case 1:
-                std::cout << "Running Signal Handler Program...\n";
+                std::cout << "Running Signal Handler...\n";
             runSignalHandler();
             break;
             case 2:
-                std::cout << "Running Producer/Consumer Program...\n";
+                std::cout << "Running Producer/Consumer...\n";
             runProducerConsumer();
+            break;
+            case 3:
+                std::cout << "Running Reader-Writer...\n";
+            runReaderWriter();
             break;
             case 0:
                 std::cout << "Exiting program. Goodbye!\n";
