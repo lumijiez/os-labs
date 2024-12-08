@@ -5,18 +5,18 @@
 #ifndef CONSUMER_H
 #define CONSUMER_H
 
-#include "buffer.h"
 #include <semaphore>
 
 class Consumer {
 public:
-    Consumer(int id, Buffer& buffer, std::counting_semaphore<5>& sem);
-    void run() const;
+    Consumer(int id, int read_fd, std::counting_semaphore<5>& consumerSem);
+    void run(std::atomic<int>& itemsConsumed, const std::atomic<bool>& stopFlag) const;
 
 private:
-    int id;
-    Buffer& buffer;
-    std::counting_semaphore<5>& consumerSem;
+    int consumerId;
+    int readFd;
+    std::counting_semaphore<5>& consumerSemaphore;
 };
 
-#endif //CONSUMER_H
+#endif
+
